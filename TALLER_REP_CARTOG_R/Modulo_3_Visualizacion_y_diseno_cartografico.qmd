@@ -1,0 +1,730 @@
+---
+title: "Módulo 3: Visualización y diseño cartográfico"
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-location: right
+    font-size: 1.5rem
+editor: visual
+---
+
+Recordemos que estamos estructurando nuestro proyecto mediante módulos independientes. Es indispensable incluir este bloque de configuración inicial en la parte superior de cada nuevo archivo \`.qmd\` que creemos. Por ello, volver a cargar las librerías base (como \`dplyr o \`sf\`) y definir los parámetros de visualización al inicio de cada módulo no es repetitivo, sino una regla de oro técnica para asegurar que el documento se compile de manera correcta y autónoma en cualquier computadora.
+
+```{r}
+if (!require("pacman")) install.packages("pacman", dependencies = TRUE)
+```
+
+```{r}
+pacman::p_load(
+  # --- Datos y mapas espaciales (GIS) ---
+  sf,                 # Manejo de datos vectoriales geográficos
+  rnaturalearth,      # Acceso a bases cartográficas del mundo
+  rnaturalearthdata,  # Base de datos complementaria
+  
+  # --- Visualización base y mapas ---
+  ggplot2,            # Sistema de gráficos principal
+  ggspatial,          # Flechas de norte, escalas gráficas, etc.
+  
+  # --- Estética, colores y escalas ---
+  viridis,            # Paletas de colores accesibles y legibles
+  colorspace,         # Modificación y ajuste fino de colores
+  
+  # --- Diseño avanzado de gráficos ---
+  lemon,              # Ejes repetidos y mejoras estéticas
+  patchwork,          # Combinación avanzada y matemática de gráficos (+ y /)
+  ggrepel,            # Etiquetas de texto que no se enciman
+  
+  # --- Manipulación de datos ---
+  dplyr,              # Limpieza, filtros y transformación de tablas
+  stringr,            # Limpieza y manipulación de textos
+  classInt,           # Intervalos y rangos de datos
+  
+  # --- Gestión de proyectos e Importación ---
+  here,               # Gestión de rutas de archivos
+  foreign,            # Lectura de datos de SPSS, Stata o SAS
+  survey              # Manejo de encuestas complejas
+)
+
+# Parámetros para ocultar mensajes de carga innecesarios
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, echo = TRUE)
+
+# Configuraciones para los datos de encuestas complejas
+options(
+  survey.lonely.psu = "adjust", # Evita errores en el diseño
+                                #     muestral complejo 
+  scipen = 999,                 # Desactiva notación científica
+  OutDec = "."                  # Uniformidad en punto decimal
+)
+```
+
+.
+
+.
+
+------------------------------------------------------------------------
+
+## Elaboración de mapas con ggplot2.
+
+.
+
+Vamos a importar las bases cartográficas desde un archivo geopackage ubicado en la misma carpeta anterior.
+
+```{r}
+# Importamos la base cartográfica de las entidades federativas se importó bajo el nombre de cartog_ent_fed
+cartog_ent_fed <- st_read(
+  here("BASES_DE_DATOS", "alim_fuera.gpkg"), 
+  layer = "entidades_federativas"
+)
+```
+
+```{r}
+# Importamos la base cartográfica de las paises vecinos se importó bajo el nombre de cartog_paises_vecinos
+cartog_paises_vecinos <- st_read(
+  here("BASES_DE_DATOS", "informacion_formato_nuevo.gpkg"), 
+  layer = "paises_vecinos"
+)
+```
+
+.
+
+.
+
+Cuando trabajamos con cartografía digital en R, el primer paso fundamental es la **inspección de metadatos y atributos**. No podemos diseñar un mapa a ciegas; necesitamos conocer con precisión matemática los nombres exactos de las columnas (campos) disponibles en nuestro objeto espacial. Un solo error de dedo en una mayúscula o un guion bajo romperá nuestro código de `ggplot2`.
+
+Para conocer la estructura de nuestra base de datos geográfica sin saturar la pantalla con miles de filas, utilizaremos funciones específicas que nos listan los nombres de las variables y nos permiten entender el "esquema" del archivo.
+
+```{r}
+# Listar únicamente los nombres de las columnas
+print("--- Nombres de las columnas disponibles ---")
+names(cartog_ent_fed)
+```
+
+```{r}
+# Inspeccionar el tipo de dato de cada columna (Estructura compacta)
+print("--- Tipo de datos de las variables ---")
+str(st_drop_geometry(cartog_ent_fed))
+```
+
+Cuando se trabaja con bases de datos complejas, como las que resultan de encuestas o *surveys*, la tentación inicial suele ser inventar abreviaturas cortas o códigos internos que tienen sentido en el momento, pero que se vuelven indescifrables unas semanas después. Una de las mejores prácticas para estructurar variables de manera profesional y comprensible es descomponer el nombre en **componentes estandarizados**, utilizando términos comunes y consistentes para los elementos clave del dato. Al observar variables como `gafv_promedio_va` o `gafv_gasto_li`, queda claro que existe un patrón: primero se define el **origen o temática general** (el prefijo `gafv`), seguido de la **métrica o proporción de referencia (en el caso de porcentajes)** calculado (`promedio`, `porcentaje respecto al gasto o ingreso`) y finalmente sufijos relativos a los elementos del área de incertidumbre. Cuando estructuramos variables de encuestas, esos sufijos finales no son aleatorios; representan los componentes analíticos esenciales de cualquier estimación estadística. Si ajustamos la nomenclatura para que sea completamente transparente, la regla de oro consiste en cerrar el nombre de la variable especificando si se trata del **valor o estimación puntual** (`_va` o `_val`), el **error estándar** (`_ee`), el **límite inferior** del intervalo de confianza (`_li` o `_lim_inf`), el **límite superior** (`_ls` o `_lim_sup`), o el **coeficiente de variación** (`_cv`).
+
+.
+
+Mantener esta anatomía rígida y predecible —donde cada posición de la palabra clave revela una propiedad única del dato— no solo evita confusiones y errores humanos al programar, sino que además permite automatizar análisis, filtrar columnas mediante código de forma masiva y facilitar que cualquier analista que herede el proyecto entienda la estructura de inmediato sin necesidad de recurrir constantemente a un diccionario de datos.
+
+.
+
+💡 **Por qué esto te salvará la vida en el código:** Al usar términos estandarizados como `_lim_inf` o `_val` al final de tus variables, puedes usar funciones de programación (como `select(ends_with("_cv"))` en R) para extraer instantáneamente todos los coeficientes de variacion de tu base de datos sin tener que buscar las columnas una por una. ¡El orden en los nombres es el primer paso para un análisis automatizado!
+
+Podemos guadar todos los coeficientes de variacion en un objeto aespacial
+
+```{r}
+# La magia de la automatización:
+# Aplicas tu filtro de nombres y LUEGO tiras la geometría
+solo_cv_df <- cartog_ent_fed %>% 
+  select(ends_with("_cv")) %>% 
+  st_drop_geometry() # <- Eliminas los atributos espaciales
+# Checas que el objeto sea aespacial
+class(solo_cv_df)
+# Ver el resultado
+print(solo_cv_df)
+```
+
+.
+
+O podemos hacer el filtro para luego poder mapear el coeficiente de variación que querramos.
+
+```{r}
+# La magia de la automatización:
+# Filtramos la base de datos para quedarnos SOLO con los Coeficientes de Variación
+solo_cv <- cartog_ent_fed %>% 
+  select(ends_with("_cv"))
+
+# Ver el resultado
+print(solo_cv)
+```
+
+```{r}
+# Graficamos el Coeficiente de Variación de los indicadores de gasto en alimentos fuera por Entidad Federativa
+ggplot(data = solo_cv) +
+  geom_sf(aes(fill = gafv_ingreso_cv)) +
+  scale_fill_viridis_c(option = "plasma", name = "CV GAFV respecto al ingreso (%)",  direction = -1) +
+  theme_minimal() +
+  labs(
+    title = "Calidad del porcentaje de gafv respecto al ingreso por Entidad Federativa",
+    subtitle = "Valores bajos de CV (tonos oscuros) indican mayor precisión estadística",
+    caption = "Fuente: Filtrado automático mediante ends_with('_cv')"
+  )
+```
+
+.
+
+.
+
+Cuando analizamos datos provenientes de encuestas de hogares a lo largo del tiempo, comparar los valores puntuales de dos años distintos (por ejemplo, el valores de 2016 contra el de 2024) no es suficiente para asegurar que hubo un cambio real en la sociedad. Debido a que las encuestas se levantan a partir de muestras y no de censos totales, cada estimación viaja con un margen de error intrínseco, lo que genera **áreas de incertidumbre** alrededor del dato. Para determinar científicamente si la diferencia entre dos periodos es estadísticamente significativa o si simplemente se debe al azar del muestreo, recurrimos a la **prueba Z de diferencia de medias o proporciones**. Esta prueba estadística toma las estimaciones puntuales de ambos puntos en el tiempo y las contrasta dividiendo su diferencia neta entre la raíz cuadrada de la suma de sus errores estándares elevados al cuadrado ($EE_1^2 + EE_2^2$). El resultado es un valor Z que, al compararse con un umbral crítico (usualmente 1.96 para un 95% de confianza), nos permite rechazar la hipótesis de que no hubo cambios. Si el valor calculado supera ese umbral, podemos afirmar con rigurosidad matemática que la variable sufrió una modificación real en el tiempo, transformando la incertidumbre de los datos aislados en una conclusión sólida y justificable para la toma de decisiones o el diseño de políticas públicas.
+
+.
+
+Matemáticamente, la Fórmula en la que se apoya la prueba
+
+Para calcular este estadístico con las variables estandarizadas que ya tienes en tu base de datos (usando la estimación puntual `_va` y el error estándar `_ee`), la estructura matemática de la prueba se define como:
+
+![](images/clipboard-4029804201.png)
+
+Donde:
+
+-   $\text{va}_1$ y $\text{va}_2$ son las estimaciones puntuales del año inicial y año final respectivamente.
+
+-   $\text{ee}_1$ y $\text{ee}_2$ son sus respectivos errores estándares.
+
+**¿Qué regla se aplica para el resultado?**
+
+Una vez obtenido el valor de $Z$ tras aplicar la fórmula a cada fila (o entidad federativa) de tus datos, la interpretación es directa:
+
+-   **Si** $|Z| \ge 1.96$: El cambio **es estadísticamente significativo** (con un 95% de confianza). La economía o el comportamiento social realmente cambiaron en ese estado.
+
+-   **Si** $|Z| < 1.96$: El cambio **no es significativo**. Cualquier subida o bajada en el número se considera "ruido visual" o fluctuación normal del muestreo; estadísticamente, el dato permaneció igual.
+
+Esta fórmula puede operacionalizarse de esta forma.
+
+```{r}
+# Definición correcta de la función
+calculo_prueba_z <- function(df, va_inicial, ee_inicial, va_final, ee_final) {
+  
+  # 1. Calculamos el valor Z (manteniendo el signo para saber la dirección)
+  v_z = ({{va_final}} - {{va_inicial}}) / sqrt({{ee_final}}^2 + {{ee_inicial}}^2)
+  
+  # 2. Evaluamos las 3 opciones posibles
+  case_when(
+    v_z >= 1.96  ~ "Aumento Significativo",
+    v_z <= -1.96 ~ "Disminución Significativa",
+    TRUE         ~ "Sin Cambio" # Todo lo que esté entre -1.96 y 1.96
+  )
+}
+```
+
+-   **`df`:** Es tu **Data Frame** (la tabla de datos o mapa `sf`). Es el contenedor que tiene toda la información y las columnas que vas a procesar.
+
+-   **`va_inicial`:** Es la columna con el **Valor o estimación puntual** del año de inicio (el promedio o total inicial).
+
+-   **`ee_inicial`:** Es la columna con el **Error Estándar** correspondiente a esa primera estimación.
+
+-   **`va_final`:** Es la columna con el **Valor o estimación puntual** del año de cierre (el promedio o total final).
+
+-   **`ee_final`:** Es la columna con el **Error Estándar** correspondiente a esta última estimación.
+
+.
+
+Vamos a aplicarla
+
+```{r}
+# La forma correcta y segura de aplicar tu función:
+cartog_ent_fed <- cartog_ent_fed %>% 
+  mutate(
+    diferencia_estadistica_16_24 = calculo_prueba_z(
+      df         = .,  # El punto le avisa a la función que use el data frame que viene del pipe
+      va_inicial = hogar_gafv_16_va, 
+      ee_inicial = hogar_gafv_16_ee,
+      va_final   = hogar_gafv_24_va, 
+      ee_final   = hogar_gafv_24_ee
+    )
+  )
+```
+
+.
+
+```{r}
+print(cartog_ent_fed$diferencia_estadistica_16_24)
+```
+
+.
+
+El análisis visual de los estimadores puntuales entre 2016 y 2024 sugiere cambios en la distribución territorial del gasto en los hogares del país. Sin embargo, debido a la naturaleza muestral de las encuestas, las variaciones observadas a simple vista pueden ser producto del error de muestreo y no reflejar transformaciones reales en las condiciones de la población. Para aislar este "ruido muestral", aplicamos una prueba $Z$ de diferencia de medias utilizando los errores estándares de cada periodo. Al contrastar ambos mapas, se hace evidente la necesidad de este control estadístico: regiones que visualmente parecían mostrar incrementos o disminuciones en sus valores puntuales se clasifican formalmente como "Sin Cambio" al incorporar sus áreas de incertidumbre (intervalos de confianza al 95%). Este enfoque metodológico garantiza que las variaciones cartografiadas como **Aumentos** o **Disminuciones Significativas** correspondan a dinámicas socioeconómicas estructurales y no a fluctuaciones aleatorias del levantamiento de la encuesta.
+
+```{r}
+# 1. Definimos la paleta de colores lógica
+colores_significancia <- c(
+  "Aumento Significativo"     = "#2ca25f", # Verde
+  "Disminución Significativa" = "#de2d26", # Rojo
+  "Sin Cambio"                = "#cccccc"  # Gris neutro
+)
+
+# 2. Generamos el mapa único de la prueba Z
+ggplot(data = cartog_ent_fed) +
+  geom_sf(aes(fill = diferencia_estadistica_16_24), color = "white", size = 0.15) +
+  scale_fill_manual(
+    values = colores_significancia, 
+    name = "Resultado Estadístico"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Significancia Estadística del Cambio (2016 - 2024)",
+    subtitle = "Prueba Z con intervalos de confianza al 95%",
+    caption = "Fuente: Cálculos propios con base en ENIGH"
+  ) +
+  theme(
+    axis.text = element_blank(),
+    panel.grid = element_blank(),
+    legend.position = "bottom"
+  )
+```
+
+.
+
+.
+
+El análisis geoestadístico de la estructura del gasto en los hogares —específicamente la proporción destinada al Gasto en Alimentos, Fuera del Hogar y Vestido (`GAFV`) respecto al gasto total— requiere de estrategias de regionalización que permitan identificar patrones territoriales claros sin comprometer la precisión científica. El uso del algoritmo de intervalos de clase (`classInt`) constituye una herramienta fundamental para agrupar las entidades federativas en estratos homogéneos de gasto. Sin embargo, al trabajar con datos provenientes de diseños muestrales complejos (`survey`), la estimación puntual convive intrínsecamente con un margen de error. Por ello, este análisis aborda la clasificación desde dos perspectivas complementarias: en primer lugar, mediante un enfoque tradicional que estratifica los estimadores puntuales observados para capturar la tendencia nominal del indicador; y, en segundo lugar, a través de un enfoque robusto que incorpora los errores estándares directamente en el algoritmo de corte, garantizando que la jerarquización del mapa refleje agrupaciones estadísticamente seguras y protegidas contra la volatilidad del muestreo.
+
+**Opción 1: Clasificar el Estimador Puntual (El método tradicional)**
+
+En este enfoque, ignoramos momentáneamente el error estándar para la regionalización y usamos `classInt` para romper el porcentaje de gasto en grupos (por ejemplo, 4 rangos mediante el algoritmo de Jenks o Cuartiles). Esto sirve para responder: *¿Qué estados gastan más y cuáles menos en GAFV?*
+
+```{r}
+# 1. Calculamos los puntos de corte (Breaks) usando cortes naturales (Jenks)
+cortes_puntuales <- classIntervals(
+  cartog_ent_fed$gafv_gasto_va, 
+  n = 4,           # Queremos 4 categorías de gasto
+  style = "jenks"  # Algoritmo de optimización
+)
+
+# 2. Creamos la columna con las categorías de texto en tu mapa
+cartog_ent_fed <- cartog_ent_fed %>%
+  mutate(
+    rango_gasto_puntual = cut(
+      gafv_gasto_va, 
+      breaks = cortes_puntuales$brks, 
+      include.lowest = TRUE,
+      labels = c("Bajo", "Medio-Bajo", "Medio-Alto", "Alto")
+    )
+  )
+```
+
+.
+
+**Opción 2: Clasificar Incorporando la Incertidumbre (El método metodológico)**
+
+Para no mentir con los datos, aquí usamos `classInt` pero no sobre el porcentaje directo, sino sobre el **Coeficiente de Variación (CV)** o sobre el **Límite Inferior del Intervalo de Confianza**.
+
+Mapear el límite inferior al 95% ($Estimación - 1.96 \times EE$) es una práctica excelente para políticas públicas, porque responde a: *¿Cuál es el porcentaje mínimo de porcentaje de gasto que podemos asegurar con certeza estadística que tiene cada estado?*\
+
+```{r}
+# 1. Calculamos el límite inferior real para cada estado (restando el margen de error)
+cartog_ent_fed <- cartog_ent_fed %>%
+  mutate(
+    limite_inferior_gasto = gafv_gasto_va - (1.96 * gafv_gasto_ee)
+  )
+
+# 2. Pasamos el límite inferior (con la incertidumbre ya restada) a classInt
+cortes_con_incertidumbre <- classIntervals(
+  cartog_ent_fed$limite_inferior_gasto, 
+  n = 4, 
+  style = "jenks"
+)
+
+# 3. Creamos la nueva columna clasificada con seguridad estadística
+cartog_ent_fed <- cartog_ent_fed %>%
+  mutate(
+    rango_gasto_seguro = cut(
+      limite_inferior_gasto, 
+      breaks = cortes_con_incertidumbre$brks, 
+      include.lowest = TRUE,
+      labels = c("Bajo Seguro", "Medio-Bajo Seguro", "Medio-Alto Seguro", "Alto Seguro")
+    )
+  )
+```
+
+.
+
+.
+
+Mapeo de ambos
+
+```{r}
+# ==============================================================================
+mapa_puntual <- ggplot(data = cartog_ent_fed) +
+  geom_sf(aes(fill = rango_gasto_puntual), color = "white", size = 0.15) +
+  scale_fill_viridis_d(
+    option = "magma", 
+    direction = -1, 
+    name = "Rango de Gasto"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Enfoque Nominal (Estimador Puntual)",
+    subtitle = "Estratificación basada únicamente en el valor promedio observado",
+    caption = "Fuente: Encuestas de hogares."
+  ) +
+  theme(
+    axis.text = element_blank(),
+    panel.grid = element_blank(),
+    legend.position = "bottom"
+  )
+
+# Desplegar el primer mapa
+mapa_puntual
+```
+
+```{r}
+# ==============================================================================
+mapa_seguro <- ggplot(data = cartog_ent_fed) +
+  geom_sf(aes(fill = rango_gasto_seguro), color = "white", size = 0.15) +
+  scale_fill_viridis_d(
+    option = "magma", 
+    direction = -1, 
+    name = "Rango con Incertidumbre"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Enfoque Estadísticamente Seguro (Límite Inferior del IC)",
+    subtitle = "Estratificación considerando el peor escenario matemático (IC 95%)",
+    caption = "Fuente: Cálculos propios incorporando errores estándar."
+  ) +
+  theme(
+    axis.text = element_blank(),
+    panel.grid = element_blank(),
+    legend.position = "bottom"
+  )
+
+# Desplegar el segundo mapa
+mapa_seguro
+```
+
+.
+
+.
+
+------------------------------------------------------------------------
+
+## Uso de escalas de color para variables cuantitativas y discretas
+
+En el ámbito de la ciencia de datos, la cartografía temática y la visualización estadística, el color ha dejado de ser un mero elemento estético para consolidarse como un canal de transmisión de información de alta precisión. La selección de una paleta cromática no responde al gusto del analista, sino a la naturaleza matemática de los datos que se pretenden representar. Jacques Bertin, pionero de la semiología gráfica, identificó al color como una de las variables visuales más potentes debido a su capacidad para activar mecanismos asociativos y de orden en el cerebro humano de forma casi instantánea. Sin embargo, para que este canal sea efectivo, debe existir una correspondencia biunívoca e inequívoca entre la estructura del dato (si mide magnitudes continuas o clasifica categorías aisladas) y la estructura de la escala de color elegida.
+
+El diseño de visualizaciones efectivas exige dominar la bifurcación fundamental entre dos tipos de datos: las variables cuantitativas (continuas o integradas en rangos) y las variables discretas (conceptuales o categóricas).
+
+**1. Escalas de Color para Variables Cuantitativas (Continuas y Secuenciales)**
+
+Cuando el objetivo es mapear variables cuantitativas —tales como ingresos, densidades de población, tasas de crecimiento o porcentajes de gasto—, el flujo de datos representa una transición numérica continua. En estos escenarios, el cerebro no busca separar grupos aislados, sino identificar **gradientes, intensidades y jerarquías** (saber dónde hay "más" y dónde hay "menos").
+
+Para ello se recurre a las **escalas secuenciales o divergentes**:
+
+-   **Escalas Secuenciales:** Utilizan la variación de la luminosidad y la saturación de un mismo tono (o una transición suave entre tonos contiguos, como en la paleta *Viridis* o *Magma*) para guiar el ojo de los valores más bajos (claros/tenues) a los más altos (oscuros/intensos).
+
+-   **Escalas Divergentes:** Se emplean cuando los datos cuantitativos poseen un punto de inflexión crítico o un centro natural, como el cero, un promedio nacional o un umbral de neutralidad. Estas escalas combinan dos gradientes secuenciales que convergen en un color neutro (generalmente blanco o gris claro) y se expanden hacia extremos cromáticamente opuestos (por ejemplo, azul para valores negativos y rojo para valores positivos), permitiendo evaluar anomalías y desviaciones a primera vista.
+
+**2. Escalas de Color para Variables Discretas (Cualitativas o Categóricas)**
+
+Por el contrario, cuando nos enfrentamos a variables discretas o categóricas —donde los datos representan atributos cualitativos independientes, como partidos políticos, tipos de suelo, regímenes jurídicos o clasificaciones estadísticas cerradas (como el "Aumento", "Disminución" o "Sin Cambio" de una prueba de hipótesis)—, la lógica cuantitativa del gradiente se rompe por completo. Aquí no existe un orden intrínseco de magnitud; un tipo de suelo no es "mayor" que otro, ni una etiqueta de texto es "superior" en términos matemáticos absolutos.
+
+Para estas variables se diseñan las **escalas cualitativas o cualitativas-discretas**:
+
+-   Estas paletas se estructuran utilizando variaciones drásticas en el **tono** (azul, verde, rojo, amarillo) pero manteniendo, en la medida de lo posible, niveles de luminosidad y saturación similares para evitar que un color destaque artificialmente sobre el otro, sugiriendo una falsa jerarquía.
+
+-   El reto de estas escalas radica en la limitación de la percepción humana: mientras que el ojo puede interpretar un gradiente cuantitativo casi infinito, la capacidad para discriminar tonos discretos diferentes en un mapa o gráfico se reduce drásticamente después de las 6 o 7 categorías, exigiendo un ejercicio riguroso de síntesis de datos.
+
+**El Impacto de la Discretización en Variables Cuantitativas**
+
+Existe un punto de convergencia crítico en el análisis avanzado de datos: la transformación de variables cuantitativas continuas en variables cuantitativas discretizadas por medio de algoritmos de intervalos de clase (como *Jenks*, *Cuartiles* o *Intervalos Iguales* a través de librerías como `classInt`). Cuando un porcentaje continuo se rompe en rangos fijos (ej. "Bajo", "Medio", "Alto"), la variable se comporta visualmente como un híbrido discreto pero con un orden lógico subyacente. En estos casos, las paletas deben fusionar ambas filosofías: mantener el gradiente secuencial de intensidad para respetar el orden numérico, pero segmentar los colores de manera limpia y contrastante para que el lector distinga los límites exactos de cada estrato.
+
+Comprender la frontera analítica entre el color como indicador de **magnitud** (cuantitativo) y el color como indicador de **identidad** (discreto) es el pilar que separa un gráfico puramente decorativo de un mapa científico capaz de resistir auditorías metodológicas y guiar con precisión la toma de decisiones estratégicas.
+
+.
+
+.
+
+La librería `colorspace` es una de las herramientas más potentes en R para el diseño de paletas porque trabaja bajo el modelo **HCL** (Hue/Tono, Chroma/Saturación, Luminance/Luminosidad), que imita cómo el ojo humano percibe los colores en lugar de cómo los mezcla una pantalla (RGB).
+
+Vamos a ver cómo usar `colorspace` para crear y aplicar ejemplos prácticos tanto de variables **cuantitativas (gradientes)** como **discretas (categorías)** usando las funciones nativas del paquete conectadas con `ggplot2`.
+
+**1. Ejemplos para Variables Cuantitativas (Secuenciales y Divergentes)**
+
+Para variables continuas, `colorspace` ofrece las funciones `scale_fill_continuous_sequential()` y `scale_fill_continuous_diverging()`. Estas garantizan que el gradiente de luminosidad sea matemáticamente uniforme.
+
+**A) Escala Secuencial (Para variables como tu porcentaje `gafv_gasto_va`)**
+
+Ideal para ver magnitudes de menos a más. Usaremos la paleta integrada `"Viridis"` o `"YlGnBu"` (Amarillo-Verde-Azul).
+
+```{r}
+# Mapa cuantitativo secuencial (Gradiente continuo)
+ggplot(data = cartog_ent_fed) +
+  geom_sf(aes(fill = gafv_gasto_va), color = "white", size = 0.1) +
+  # Usamos colorspace para el gradiente secuencial
+  scale_fill_continuous_sequential(
+    palette = "YlGnBu", 
+    rev = TRUE, 
+    name = "% Gasto"
+  ) +
+  theme_minimal() +
+  labs(title = "Escala Cuantitativa Secuencial (colorspace)")
+```
+
+**B) Escala Divergente (Para la Prueba Z antes de discretizarla)**
+
+Si tuvieras el valor numérico de $Z$ (donde 0 es neutral, los positivos son aumentos y los negativos reducciones), usarías una escala divergente como `"Blue-Red"`.
+
+```{r}
+# 1. CREAR LA COLUMNA NUMÉRICA 'z_numerico' en tu base de datos
+cartog_ent_fed <- cartog_ent_fed %>% 
+  mutate(
+    # Hacemos la operación matemática directa de la prueba Z
+    z_numerico = (hogar_gafv_24_va - hogar_gafv_16_va) / sqrt(hogar_gafv_24_ee^2 + hogar_gafv_16_ee^2)
+  )
+
+# ==============================================================================
+# EJEMPLO A: MAPA CUANTITATIVO SECUENCIAL (Tu porcentaje de gasto)
+# ==============================================================================
+ggplot(data = cartog_ent_fed) +
+  geom_sf(aes(fill = gafv_gasto_va), color = "white", size = 0.1) +
+  scale_fill_continuous_sequential(
+    palette = "YlGnBu", 
+    rev = TRUE, 
+    name = "% Gasto"
+  ) +
+  theme_minimal() +
+  labs(title = "Escala Cuantitativa Secuencial (colorspace)")
+
+# ==============================================================================
+# EJEMPLO B: MAPA CUANTITATIVO DIVERGENTE (Ahora sí con 'z_numerico')
+# ==============================================================================
+ggplot(data = cartog_ent_fed) +
+  geom_sf(aes(fill = z_numerico), color = "white", size = 0.1) +
+  scale_fill_continuous_diverging(
+    palette = "Blue-Red 3", 
+    mid = 0, # El cero exacto será completamente blanco/gris neutro
+    name = "Valor Z"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Escala Cuantitativa Divergente (colorspace)",
+    subtitle = "Gradiente continuo del valor Z (Azul = Disminución, Rojo = Aumento)"
+  )
+```
+
+**2. Ejemplos para Variables Discretas (Cualitativas o Categorizadas)**
+
+Cuando los datos son categorías independientes o rangos cortados con `classInt`, necesitamos que `colorspace` genere colores separados ("discretos") usando `scale_fill_discrete_qualitative()` o `scale_fill_discrete_sequential()`.
+
+**A) Escala Discreta Cualitativa (Para la Prueba Z ya clasificada)**
+
+Para tus tres categorías de la prueba Z ("Aumento", "Disminución", "Sin Cambio"), queremos colores con el mismo nivel de brillo para que ninguno "pese" más que el otro, pero con tonos drásticamente distintos. Usaremos la paleta `"Dark 3"` o `"Set 2"`.
+
+```{r}
+# Mapa discreto cualitativo (Categorías puras)
+ggplot(data = cartog_ent_fed) +
+  geom_sf(aes(fill = diferencia_estadistica_16_24), color = "white", size = 0.1) +
+  # Usamos colorspace para asignar tonos balanceados a las categorías
+  scale_fill_discrete_qualitative(
+    palette = "Dark 3", 
+    name = "Resultado Z"
+  ) +
+  theme_minimal() +
+  labs(title = "Escala Discreta Cualitativa (colorspace)")
+```
+
+**B) Escala Discreta Secuencial (Para los rangos de `classInt`)**
+
+Para tus variables `rango_gasto_puntual` ("Bajo", "Medio", "Alto"), los datos son discretos (son factores) pero **tienen un orden**. Aquí usamos `scale_fill_discrete_sequential()` para que divida un gradiente en bloques limpios.
+
+```{r}
+# Mapa discreto ordinal (Rangos de classInt)
+ggplot(data = cartog_ent_fed) +
+  geom_sf(aes(fill = rango_gasto_puntual), color = "white", size = 0.1) +
+  
+  # Usamos una paleta secuencial oficial de colorspace ("Heat" es la equivalente a Magma)
+  scale_fill_discrete_sequential(
+    palette = "Heat",  # <- ¡Cambio clave aquí!
+    rev = TRUE,        # Mantiene el color oscuro para el estrato 'Alto'
+    name = "Estrato"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Escala Discreta Secuencial por Rangos (colorspace)",
+    subtitle = "Paleta basada en el espacio HCL optimizado"
+  )
+```
+
+💡 **Tip de Oro con `colorspace`**
+
+Si quieres ver de forma interactiva todas las paletas que tienes disponibles en esta librería para elegir la que mejor le vaya a tu mapa, corre esta línea en tu consola de R:
+
+```{r}
+colorspace::hclwizard()
+```
+
+Esto te abrirá una aplicación web local donde puedes explorar las paletas secuenciales, divergentes y cualitativas, e incluso probar cómo las vería una persona con daltonismo (deuteranopía o protanopía), asegurando que tu mapa de gasto sea 100% accesible.
+
+.
+
+.
+
+------------------------------------------------------------------------
+
+## **Elementos cartográficos (leyenda, escala gráfica, norte)**
+
+La cartografía es, fundamentalmente, un ejercicio de comunicación visual donde un fragmento de la realidad tridimensional se codifica y se transfiere a un plano bidimensional. Para que este canal de comunicación sea efectivo y no se preste a interpretaciones erróneas o distorsiones metodológicas, el mapa no puede depender únicamente de sus geometrías y colores; requiere obligatoriamente de un sistema de referencia y decodificación compuesto por sus tres elementos cartográficos esenciales: la leyenda, la escala gráfica y la flecha de norte. Estos componentes actúan como el puente cognitivo entre el cartógrafo y el lector, transformando un gráfico abstracto en un documento científico y legal con validez geoespacial. Sin ellos, un mapa de coropletas pierde su capacidad de responder a las tres preguntas fundamentales de la geografía: *¿qué estamos midiendo?*, *¿cuánto mide en la realidad?* y *¿hacia dónde está orientado?*
+
+**1. La Leyenda: El Diccionario del Mapa**
+
+La leyenda es el diccionario visual del mapa; es el elemento encargado de romper el aislamiento de los datos traduciendo los códigos cromáticos y simbólicos en conceptos analíticos comprensibles. Cuando representamos variables, ya sean discretas o cuantitativas (como los rangos de gasto calculados con `classInt` o las categorías de una prueba $Z$), la leyenda le asigna un significado inequívoco a cada tono. Una leyenda bien diseñada debe respetar estrictamente la jerarquía de los datos: si la variable es ordinal, las cajas de color deben seguir una secuencia lógica e intuitiva, asegurando que los límites de cada intervalo (sus *breaks*) queden claros y legibles. Omitir la leyenda o estructurarla de forma desordenada reduce el mapa a una composición cromática decorativa pero carente de utilidad práctica.
+
+**2. La Escala Gráfica: La Dimensión Espacial Real**
+
+Por su parte, la escala gráfica es el elemento que dota al mapa de proporción y sentido de la realidad física, permitiendo al lector calcular distancias y magnitudes superficiales de manera directa. A diferencia de la escala numérica (por ejemplo, 1:250,000), la cual se vuelve completamente obsoleta e imprecisa si el mapa se reduce, se amplía o se proyecta en una pantalla digital o un documento Quarto, la escala gráfica es un elemento dinámico. Al ser una barra o segmento graduado que se estira o se encoge en la misma proporción que el mapa completo, mantiene siempre su validez matemática. En R, herramientas como el paquete `ggspatial` permiten automatizar su colocación de forma precisa, evitando que el analista cometa errores de cálculo métrico al cambiar de proyección cartográfica.
+
+**3. El Norte Cartográfico: La Orientación del Territorio**
+
+Finalmente, el norte —representado habitualmente mediante una rosa de los vientos o una flecha de orientación simplificada— es la guía angular que define la posición del territorio respecto al sistema de coordenadas global. Aunque existe la convención cartográfica generalizada de diseñar los mapas con el norte apuntando hacia la parte superior de la página, esto no siempre es así, especialmente en mapas de trayectorias, análisis costeros o regiones polares donde la orientación óptima responde a la forma del fenómeno estudiado. Introducir la flecha de norte no solo cumple con un estándar de rigor metodológico, sino que ancla el mapa al espacio geográfico global, permitiendo al usuario comprender la vecindad, los flujos y la dirección de los procesos socioeconómicos que se están cartografiando.
+
+.
+
+```{r}
+# Mapa único con Escala Gráfica y Norte incorporados
+ggplot(data = cartog_ent_fed) +
+  # 1. Tu capa geográfica base
+  geom_sf(aes(fill = diferencia_estadistica_16_24), color = "white", size = 0.15) +
+  
+  # 2. Tu paleta de colores de colorspace
+  scale_fill_discrete_qualitative(palette = "Dark 3", name = "Resultado Z") +
+  
+  # ==============================================================================
+  # 3. AGREGAR LA BARRA DE ESCALA
+  # ==============================================================================
+  # 'location' define la esquina: "bl" = Bottom-Left (Abajo a la izquierda)
+  # 'width_hint' le dice a R qué porcentaje del mapa debe intentar medir la barra
+  annotation_scale(
+    location = "bl",         # Opciones: "tl", "tr", "bl", "br"
+    width_hint = 0.25,       # Intenta que la barra mida el 25% del ancho del mapa
+    style = "ticks",         # Estilo de líneas. Otra opción hermosa es "bar" (blanco y negro)
+    text_col = "black",      # Color del texto de los kilómetros
+    line_col = "black"       # Color de la línea de la escala
+  ) +
+  
+  # ==============================================================================
+  # 4. AGREGAR LA FLECHA DE NORTE
+  # ==============================================================================
+  # 'location' define la esquina: "tl" = Top-Left (Arriba a la izquierda)
+  annotation_north_arrow(
+    location = "tr",         # Colocado arriba a la izquierda para que no estorbe
+    which_north = "true",    # Apunta al norte geográfico real
+    pad_x = unit(0.2, "in"), # Margen de separación del borde en el eje X
+    pad_y = unit(0.2, "in"), # Margen de separación del borde en el eje Y
+    style = north_arrow_fancy_orienteering(
+      fill = c("black", "white"), # Colores internos de la flecha
+      line_col = "gray20"         # Color del contorno
+    )
+  ) +
+  # ==============================================================================
+  
+  theme_minimal() +
+  labs(
+    title = "Significancia Estadística del Cambio con Rigor Cartográfico",
+    subtitle = "Inclusión de escala métrica adaptativa y orientación norte"
+  ) +
+  theme(
+    axis.text = element_blank(),
+    panel.grid = element_blank(),
+    legend.position = "bottom"
+  )
+```
+
+💡 **Dos consejos clave al usar estos elementos en R:**
+
+1.  **No se rompen si cambias el tamaño:** Si guardas el mapa o lo renderizas en Quarto más grande o más chico, `ggspatial` recalcula automáticamente los kilómetros de la barra para que la escala siga siendo 100% real y exacta.
+
+2.  **Ubicaciones (`location`):** Las combinaciones son las siglas en inglés de las esquinas:
+
+    -   `"tl"` = Top-Left (Arriba Izquierda)
+
+    -   `"tr"` = Top-Right (Arriba Derecha)
+
+    -   `"bl"` = Bottom-Left (Abajo Izquierda)
+
+    -   `"br"` = Bottom-Right (Abajo Derecha)
+
+.
+
+.
+
+------------------------------------------------------------------------
+
+## **Exportación de mapas en alta resolución (PDF / JPG / TIFF)**
+
+La fase culminante de cualquier flujo de trabajo en cartografía automatizada y ciencia de datos espaciales es la transición del entorno de desarrollo (la ventana gráfica de RStudio o el renderizado de Quarto) al archivo de salida definitivo. Este proceso de exportación no es un simple guardado de imagen, sino una operación de traducción técnica donde se definen la fidelidad cromática, la nitidez de las geometrías vectores y la legibilidad de los textos analíticos. Un mapa metodológicamente perfecto puede perder toda su utilidad si al exportarse sufre de pixelación, compresión agresiva de color o pérdida de escala. Por ello, la elección estratégica entre formatos vectoriales y formatos rasterizados, así como la configuración precisa de la densidad de píxeles, constituyen el último filtro de calidad que garantiza que el mapa resista auditorías visuales en reportes impresos, artículos indexados o plataformas ejecutivas digitales.
+
+Para asegurar un estándar de publicación profesional, el analista debe dominar las propiedades y los casos de uso de los tres formatos principales de exportación:
+
+**1. Formato PDF (Portable Document Format): La Perfección Vectorial**
+
+El formato PDF es el estándar de oro para la edición y publicación de mapas temáticos. Al tratarse de un formato basado en vectores, las líneas de los límites estatales (`geom_sf`), los textos de las leyendas y las etiquetas no se guardan como una cuadrícula de puntos, sino como ecuaciones matemáticas de formas geométricas. Esto significa que el mapa posee una resolución infinita: el usuario puede hacer un zoom del 1000% en un monitor de alta densidad o imprimir el documento en un formato de gran escala (como un póster de ingeniería) sin que las líneas muestren el más mínimo rastro de degradación o pixelación. Es el formato obligatorio cuando el mapa va a integrarse en reportes finales en LaTeX, Quarto, o si pasará por un proceso posterior de diseño editorial en herramientas como Adobe Illustrator.
+
+**2. Formato TIFF (Tagged Image File Format): La Rigurosidad del Píxel sin Pérdida**
+
+Cuando los mapas combinan capas vectoriales con capas rasterizadas pesadas (como modelos de elevación digital, imágenes satelitales de fondo o gradientes de densidad continuos muy complejos), el formato TIFF es la opción técnica preferida. A diferencia de otros formatos comprimidos, TIFF es un formato contenedor de mapas de bits sin pérdida (*lossless*), lo que significa que preserva con exactitud matemática el valor de color de cada píxel individual. Es el estándar exigido por las revistas científicas internacionales de alto impacto para la entrega de figuras, ya que permite almacenar metadatos geoespaciales y canales de color profundos (CMYK para impresión litográfica o RGB para pantallas) garantizando que los sutiles gradientes secuenciales calculados con `colorspace` no se agrupen en bloques de color distorsionados.
+
+**3. Formato JPG/JPEG (Joint Photographic Experts Group): Eficiencia y Difusión Digital**
+
+El formato JPG representa el balance orientado a la practicidad, la velocidad de carga y la difusión masiva en plataformas web, presentaciones ejecutivas en PowerPoint o redes sociales. Es un formato rasterizado con compresión con pérdida (*lossy*), diseñado específicamente para reducir drásticamente el peso del archivo sacrificando sutiles detalles de fondo que el ojo humano apenas percibe a simple vista. Si bien no es el formato adecuado para impresión de archivo o conservación cartográfica debido a los "artefactos de compresión" que suelen aparecer alrededor de los textos y líneas finas, su Operationalización en R requiere un control estricto de los puntos por pulgada (DPI). Exportar un JPG configurado a un mínimo de **300 DPI** asegura que, a pesar de la compresión, el mapa mantenga una nitidez y claridad visual impecable para cualquier lector digital.
+
+.
+
+.
+
+Procedemos a hacer un mapa.
+
+```{r}
+ggplot(data = cartog_ent_fed) +
+  # 1. Dibujar México con tu variable de gasto
+  geom_sf(aes(fill = gafv_gasto_va), color = "white", linewidth = 0.2) +
+  
+  # 2. Paleta de colores menta (claro para bajo, oscuro para alto)
+  scale_fill_continuous_sequential(
+    palette = "Mint", 
+    rev = TRUE, 
+    name = "% Gasto"
+  ) +
+  
+  # 3. Barra de escala chica abajo a la izquierda
+  annotation_scale(
+    location = "bl",
+    width_hint = 0.15,
+    style = "bar",
+    text_size = 7
+  ) +
+  
+  # 4. Flecha de norte chica arriba a la izquierda
+  annotation_north_arrow(
+    location = "tr",
+    style = north_arrow_minimal()
+  ) +
+  
+  # 5. Títulos sencillos y leyenda abajo
+  labs(
+    title = "Distribución del Gasto (GAFV)",
+    caption = "Fuente: ENIGH"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom"
+  )
+```
+
+.
+
+Ahora lo exportaremos en formato tiff con una calidad de 300 dpi
+
+```{r}
+ggsave("mapa_exportacion.tiff", 
+       width = 16, 
+       height = 12, 
+       units = "cm", 
+       dpi = 300)
+```
+
+.
+
+.
+
+**¡Gracias por completar el Taller!**
+
+.
+
+.
